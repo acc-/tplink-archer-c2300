@@ -1,2 +1,3 @@
-# tplink-archer-c2300
-Hacking TPLink Archer C2300
+# Hacking TPLink Archer C2300
+
+Details in the Wiki section.
