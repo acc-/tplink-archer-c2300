@@ -1,8 +1,10 @@
-#!/bin/sh
-[ $# -lt 1 ] && echo "Syntax: $0 xml-filename" && exit
+#!/bin/bash
+[ $# -lt 1 ] && echo "Syntax: $0 filename.xml [output-filename.bin]" && exit
 
 IN=$1
-OUT=$IN.bin
+[ $# -lt 2 ] && OUT=${IN%.*}.bin || OUT=$2
+
+OPENSSL=/usr/local/bin/openssl
 
 [ ! -f $IN ] && echo File $IN does not exist && exit
 
@@ -16,7 +18,7 @@ TMP=$IN-tmp-dir
 mkdir -p $TMP
 
 # encrypt xml to get orig.bin file
-openssl zlib -in $IN | openssl aes-256-cbc $AES -out $TMP/orig.bin
+cat $IN | $OPENSSL zlib | $OPENSSL aes-256-cbc $AES -out $TMP/orig.bin
 
 # create binary file (16 bytes) with content of product name md5
 echo $OUR_MD5 | xxd -r -p >$TMP/md5file
@@ -25,8 +27,8 @@ echo $OUR_MD5 | xxd -r -p >$TMP/md5file
 cat $TMP/md5file $TMP/orig.bin >$TMP/mid.bin
 
 # encrypt mid.bin to prepare final .bin acceptable by TP-Link firmware - Restore
-openssl zlib -in $TMP/mid.bin | openssl aes-256-cbc $AES -out $OUT
-
-rm -rf $TMP
+$OPENSSL zlib -in $TMP/mid.bin | $OPENSSL aes-256-cbc $AES -out $OUT
 
 echo BIN file saved in $OUT
+
+rm -rf $TMP
