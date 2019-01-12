@@ -20,3 +20,12 @@ dropbear was built with all these programs supported
 ./configure --host=arm-linux --disable-syslog --disable-zlib CC=arm-linux-gcc LD=arm-linux-ld
 make PROGRAMS="dropbear dbclient dropbearkey scp" MULTI=1 strip
 ```
+
+Replace existing /usr/bin/dropbear with the new one
+
+# openvpn
+Original OpenVPN binaries is quite old, v2.3.8. The new binary is v2.4.6.
+
+Installation steps:
+- replace /usr/sbin/openvpn
+- extract openvpn-libs.tgz into /usr/lib
