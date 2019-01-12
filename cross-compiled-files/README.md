@@ -22,10 +22,3 @@ make PROGRAMS="dropbear dbclient dropbearkey scp" MULTI=1 strip
 ```
 
 Replace existing /usr/bin/dropbear with the new one
-
-# openvpn
-Original OpenVPN binaries is quite old, v2.3.8. The new binary is v2.4.6.
-
-Installation steps:
-- replace /usr/sbin/openvpn
-- extract openvpn-libs.tgz into /usr/lib
