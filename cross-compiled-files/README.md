@@ -1,6 +1,14 @@
 # Cross compiled files
 Compiled for ARM architecture, ready to be executable on Archer C2300 router.
 
+# busybox
+
+busybox is compiled with default options
+```
+make ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- defconfig
+```
+
+
 # dropbear
 Original dropbear contains several apps bundled into one executable, with symbolic links.
 ```
