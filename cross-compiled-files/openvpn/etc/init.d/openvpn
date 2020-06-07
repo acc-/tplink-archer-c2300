@@ -1,0 +1,245 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2008-2013 OpenWrt.org
+# Copyright (C) 2008 Jo-Philipp Wich
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+
+START=90
+STOP=10
+
+SERVICE_DAEMONIZE=1
+SERVICE_WRITE_PID=1
+
+EXTRA_COMMANDS="up down"
+PUBLIC_DNS_SERVER="8.8.8.8"
+LIST_SEP="
+"
+
+openvpn_handle_fw()
+{
+	local enabled="off"
+	local proto="udp"
+	local port="1194"
+    local access="home"
+
+	config_load openvpn
+	config_get enabled "server" "enabled"
+	config_get proto "server" "proto"
+	config_get port "server" "port"
+	config_get access "server" "access"
+
+	if [ "$enabled" != "on" ]; then
+		fw openvpn_block $proto $port
+		return 0
+	fi
+
+	# firewall handle 
+	# iptables -t filter -I INPUT 1 -i eth0 -p udp --dport 1194 -j ACCEPT
+	if [ "$1" = "start" ]; then
+		fw openvpn_access $proto $port $access
+	elif [ "$1" = "stop" ]; then 
+		fw openvpn_block $proto $port $access
+	fi
+}
+
+get_network() {
+	local ipaddr="$1"
+	local netmask="$2"
+
+	echo "$ipaddr-$netmask" | awk -F '[.-]' '{ ip = lshift($1, 24) + lshift($2, 16) + lshift($3, 8) + $4; \
+		mask = lshift($5, 24) + lshift($6, 16) + lshift($7, 8) + $8; \
+		net = and(ip, mask); \
+		printf("%d.%d.%d.%d", and(rshift(net, 24), 0x00FF), and(rshift(net, 16), 0x00FF), and(rshift(net, 8), 0x00FF), and(net, 0x00FF)); \
+	}'
+}
+
+append_param() {
+	local s="$1"
+	local v="$2"
+	case "$v" in
+		*_*_*_*) v=${v%%_*}-${v#*_}; v=${v%%_*}-${v#*_}; v=${v%%_*}-${v#*_} ;;
+		*_*_*)   v=${v%%_*}-${v#*_}; v=${v%%_*}-${v#*_} ;;
+		*_*)     v=${v%%_*}-${v#*_} ;;
+	esac
+	echo -n "$v" >> "/var/etc/openvpn-$s.conf"
+	return 0
+}
+
+append_bools() {
+	local p; local v; local s="$1"; shift
+	for p in $*; do
+		config_get_bool v "$s" "$p"
+		[ "$v" = 1 ] && append_param "$s" "$p" && echo >> "/var/etc/openvpn-$s.conf"
+	done
+}
+
+append_params() {
+	local p; local v; local s="$1"; shift
+	for p in $*; do
+		config_get v "$s" "$p"
+		IFS="$LIST_SEP"
+		if [ "$p" == "server" -a "$s" == "$server" ]; then
+		    local ipaddr=${v%% *}
+		    local mask=${v##* }
+		    local network="$(get_network $ipaddr $mask)"
+		    echo "$p $network $mask" >> "/var/etc/openvpn-$s.conf"                   
+		else
+		    for v in $v; do
+			    [ -n "$v" ] && append_param "$s" "$p" && echo " $v" >> "/var/etc/openvpn-$s.conf"
+		    done
+		fi
+		unset IFS
+	done
+}
+
+append_access() {
+	local s="$1"
+	local access=
+	local server=
+	local ipaddr="`uci get network.lan.ipaddr`"
+	local netmask="`uci get network.lan.netmask`"
+	local network=
+
+	# added by CCy for C2200, to solve the openvpn low throughput problem temporarily
+	echo "sndbuf 655350" >> "/var/etc/openvpn-$s.conf"
+	# add ended by CCy
+
+	# default gateway
+	config_get access "$s" "access" "home"
+	if [ "$access" == "internet" ]; then
+		# case client doesn't have gateway route
+		echo "push \"route 0.0.0.0 0.0.0.0\"" >> "/var/etc/openvpn-$s.conf"
+		# redirect gateway route
+		echo "push \"redirect-gateway def1\"" >> "/var/etc/openvpn-$s.conf"
+	fi
+
+	# push route lan network whenever "$access" equals "internet" or "home"
+	network="$(get_network $ipaddr $netmask)"
+	[ $s == "server" ] && (echo "push \"route $network $netmask\"" >> "/var/etc/openvpn-$s.conf")
+	config_get server "$s" "server" "0.0.0.0"
+	if [ "$server" != "0.0.0.0" ]; then
+		ipaddr=${server%% *}
+		netmask=${server##* }
+		network="$(get_network $ipaddr $netmask)"
+		echo "push \"route $network $netmask\"" >> "/var/etc/openvpn-$s.conf"  
+		
+		#push dns
+		serverip=$(echo $network | awk -F"." '{print $1 "." $2 "." $3 ".1"}')
+		echo "push \"dhcp-option DNS $serverip\"" >> "/var/etc/openvpn-$s.conf"
+		echo "push \"dhcp-option DNS $PUBLIC_DNS_SERVER\"" >> "/var/etc/openvpn-$s.conf"
+	fi      
+}
+
+section_enabled() {
+	config_get_bool enable  "$1" 'enable'  0
+	config_get_bool enabled "$1" 'enabled' 0
+	[ $enable -gt 0 ] || [ $enabled -gt 0 ]
+}
+
+start_instance() {
+	local s="$1"
+
+	section_enabled "$s" || return 1
+
+	[ ! -d "/var/run" ] && mkdir -p "/var/run"
+	[ ! -d "/var/etc" ] && mkdir -p "/var/etc"
+	[ -f "/var/etc/openvpn-$s.conf" ] && rm "/var/etc/openvpn-$s.conf"
+
+	# append flags
+	append_bools "$s" \
+		auth_nocache auth_retry auth_user_pass_optional bind ccd_exclusive client client_cert_not_required \
+		client_to_client comp_noadapt disable \
+		disable_occ down_pre duplicate_cn fast_io float http_proxy_retry \
+		ifconfig_noexec ifconfig_nowarn ifconfig_pool_linear management_forget_disconnect management_hold \
+		management_query_passwords management_signal mktun mlock mtu_test multihome mute_replay_warnings \
+		nobind no_iv no_name_remapping no_replay opt_verify passtos persist_key persist_local_ip \
+		persist_remote_ip persist_tun ping_timer_rem pull push_reset \
+		remote_random rmtun route_noexec route_nopull single_session socks_proxy_retry \
+		suppress_timestamps tcp_nodelay test_crypto tls_client tls_exit tls_server \
+		tun_ipv6 up_delay up_restart username_as_common_name
+
+	# append params
+	append_params "$s" \
+		cd askpass auth auth_user_pass auth_user_pass_verify bcast_buffers ca cert \
+		chroot cipher client_config_dir client_connect client_disconnect comp_lzo connect_freq \
+		connect_retry connect_timeout connect_retry_max crl_verify dev dev_node dev_type dh \
+		echo engine explicit_exit_notify fragment group hand_window hash_size \
+		http_proxy http_proxy_option http_proxy_timeout ifconfig ifconfig_pool \
+		ifconfig_pool_persist ifconfig_push inactive ipchange iroute keepalive \
+		key key_method keysize learn_address link_mtu lladdr local log log_append \
+		lport management management_log_cache max_clients \
+		max_routes_per_client mode mssfix mtu_disc mute nice ns_cert_type ping \
+		ping_exit ping_restart pkcs12 plugin port port_share prng proto rcvbuf \
+		redirect_gateway remap_usr1 remote remote_cert_eku remote_cert_ku remote_cert_tls \
+		reneg_bytes reneg_pkts reneg_sec \
+		replay_persist replay_window resolv_retry route route_delay route_gateway \
+		route_metric route_up rport script_security secret server server_bridge setenv shaper sndbuf \
+		socks_proxy status status_version syslog tcp_queue_limit tls_auth \
+		tls_cipher tls_remote tls_timeout tls_verify tmp_dir topology tran_window \
+		tun_mtu tun_mtu_extra txqueuelen user verb down push up
+
+	# handle client access type
+	append_access "$s"
+
+	SERVICE_PID_FILE="/var/run/openvpn-$s.pid"
+	service_start /usr/local/bin/busybox taskset 2 /usr/sbin/openvpn --syslog "openvpn($s)" --writepid "$SERVICE_PID_FILE" --config "/var/etc/openvpn-$s.conf"
+}
+
+stop_instance() {
+	local s="$1"
+
+	# section_enabled "$s" || return 1
+
+	SERVICE_PID_FILE="/var/run/openvpn-$s.pid"
+	service_stop /usr/sbin/openvpn
+}
+
+reload_instance() {
+	local s="$1"
+
+	section_enabled "$s" || return 1
+
+	SERVICE_PID_FILE="/var/run/openvpn-$s.pid"
+	service_reload /usr/sbin/openvpn
+}
+
+start() {
+	config_load 'openvpn'
+	config_foreach start_instance 'openvpn'
+	openvpn_handle_fw start
+}
+
+stop() {
+	config_load 'openvpn'
+	config_foreach stop_instance 'openvpn'
+	openvpn_handle_fw stop
+}
+
+reload() {
+	config_load 'openvpn'
+	config_foreach reload_instance 'openvpn'
+}
+
+up() {
+	local exists
+	local instance
+	config_load 'openvpn'
+	for instance in "$@"; do
+		config_get exists "$instance" 'TYPE'
+		if [ "$exists" == "openvpn" ]; then
+			start_instance "$instance"
+		fi
+	done
+}
+
+down() {
+	local exists
+	local instance
+	config_load 'openvpn'
+	for instance in "$@"; do
+		config_get exists "$instance" 'TYPE'
+		if [ "$exists" == "openvpn" ]; then
+			stop_instance "$instance"
+		fi
+	done
+}
